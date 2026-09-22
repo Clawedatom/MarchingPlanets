@@ -12,6 +12,25 @@ public class PlanetMeshEditor : Editor
         PlanetMeshGenerator generator = (PlanetMeshGenerator)target;
 
         GUILayout.Space(15);
+        EditorGUILayout.LabelField("Planet Data", EditorStyles.boldLabel);
+        using (new EditorGUI.DisabledScope(!generator.HasPlanetData))
+        {
+            if (GUILayout.Button("Apply Assigned Planet Data"))
+            {
+                Undo.RecordObject(generator, "Apply Planet Data");
+                generator.ApplyPlanetData();
+                EditorUtility.SetDirty(generator);
+            }
+        }
+
+        if (!generator.HasPlanetData)
+        {
+            EditorGUILayout.HelpBox(
+                "Assign a PlanetData asset above to save and reuse this planet's generation recipe.",
+                MessageType.Info);
+        }
+
+        GUILayout.Space(15);
         EditorGUILayout.LabelField("Randomization Controls", EditorStyles.boldLabel);
 
         // Individual Randomize Buttons
@@ -37,6 +56,13 @@ public class PlanetMeshEditor : Editor
         {
             Undo.RecordObject(generator, "Randomize Planet Ocean Colour");
             generator.RandomizeOceanColour();
+            EditorUtility.SetDirty(generator);
+
+        }
+        if (GUILayout.Button("Randomize Sea Level"))
+        {
+            Undo.RecordObject(generator, "Randomize Planet Sea Level");
+            generator.RandomizeSeaLevel();
             EditorUtility.SetDirty(generator);
 
         }

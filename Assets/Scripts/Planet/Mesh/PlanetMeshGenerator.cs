@@ -6,9 +6,15 @@ public class PlanetMeshGenerator : MonoBehaviour
 {
     #region Class References
 
+    PlanetManager manager;
+    [Header("Planet Data")]
+    [Tooltip("Optional saved recipe for this planet. When assigned, its values are applied before generation.")]
+    [SerializeField] private bool usePlanetDataOnGenerate = true;
     #endregion
 
     #region Private Fields
+
+    public bool IsInitialized { get; private set; }
     //chunk fields
     private Dictionary<Vector3Int, PlanetChunk> chunkIDMap;
 
@@ -41,6 +47,10 @@ public class PlanetMeshGenerator : MonoBehaviour
     [Range(0.35f, 0.65f)][SerializeField] private float persistence = 0.5f;
     [Range(1.8f, 2.5f)][SerializeField] private float lacunarity = 2.0f;
 
+    [Header("Mountain / Terrain Shape")]
+    [SerializeField] private bool useRidgedNoise = true;
+    [Range(1f, 4f)][SerializeField] private float elevationExponent = 2.0f;
+
     [Header("Seed Settings")]
     [SerializeField] private int seed = 1337;
     [SerializeField] private bool randomizeSeedOnGenerate = false;
@@ -56,8 +66,9 @@ public class PlanetMeshGenerator : MonoBehaviour
     [SerializeField] private bool createOcean = true;
     
     [SerializeField] private float seaLevelOffset = 0f;
+    [SerializeField] private Vector2 seaLevelRange = new Vector2(-0.6f, 0.2f);
     [SerializeField] private bool randomizeOceanColour;
-
+    [SerializeField] private bool randomizeSeaLevelOnGenerate = false;
     [SerializeField] private Color oceanColour;
     
     private GameObject oceanObject;
@@ -66,9 +77,21 @@ public class PlanetMeshGenerator : MonoBehaviour
     private float maxSurfaceRadius;
     [SerializeField] private Gradient planetGradient;
 
+    private float averageSurfaceHeight;
     #endregion
 
     #region Properties
+    public PlanetManager Manager
+    {
+        get
+        {
+            if (manager == null)
+            {
+                manager = GetComponent<PlanetManager>();
+            }
+            return manager;
+        }
+    }
     public int ChunkSize => chunkSize;
     public float IsoLevel => isoLevel;
     public Material PlanetMat => planetChunkMaterial;
@@ -80,15 +103,33 @@ public class PlanetMeshGenerator : MonoBehaviour
     public float Width => width;
     public float Height => height;
     public float Depth => depth;
+
+    public float AverageSurfaceHeight => averageSurfaceHeight;
+
+    public bool HasPlanetData => manager != null && manager.PlanetData != null;
     #endregion
 
-    
 
-    
+
+    #region Update Methods
+    public void OnUpdate()
+    {
+        if (chunkIDMap == null)
+            return;
+
+        UpdateDirtyChunks();
+    }
+    #endregion
 
     #region Generation Methods
     public void GeneratePlanetMesh()
     {
+        IsInitialized = false;
+
+        if (usePlanetDataOnGenerate && Manager.PlanetData != null)
+        {
+            ApplyPlanetData();
+        }
 
         if (randomizeSeedOnGenerate)
         {
@@ -137,6 +178,46 @@ public class PlanetMeshGenerator : MonoBehaviour
 
         GenerateChunks();
         GenerateOcean();
+
+
+        IsInitialized = true;
+    }
+
+    /// <summary>
+    /// Copies the assigned PlanetData asset to this generator. Keep this public
+    /// so the custom Inspector can apply a data asset without generating yet.
+    /// </summary>
+    public void ApplyPlanetData()
+    {
+        PlanetData planetData = manager.PlanetData;
+        if (planetData == null)
+        {
+            Debug.LogWarning("PlanetMeshGenerator: No PlanetData asset is assigned.", this);
+            return;
+        }
+
+        width = planetData.Width;
+        height = planetData.Height;
+        depth = planetData.Depth;
+        voxelSize = planetData.VoxelSize;
+        isoLevel = planetData.IsoLevel;
+        planetRadius = planetData.PlanetRadius;
+        chunkSize = planetData.ChunkSize;
+        planetChunkPrefab = planetData.PlanetChunkPrefab;
+        planetChunkMaterial = planetData.PlanetChunkMaterial;
+        noiseScale = planetData.NoiseScale;
+        noiseHeight = planetData.NoiseHeight;
+        octaves = planetData.Octaves;
+        persistence = planetData.Persistence;
+        lacunarity = planetData.Lacunarity;
+        useRidgedNoise = planetData.UseRidgedNoise;
+        elevationExponent = planetData.ElevationExponent;
+        seed = planetData.Seed;
+        createOcean = planetData.CreateOcean;
+        seaLevelOffset = planetData.SeaLevelOffset;
+        seaLevelRange = planetData.SeaLevelRange;
+        oceanColour = planetData.OceanColour;
+        planetGradient = CloneGradient(planetData.PlanetGradient);
     }
 
     public void ClearExistingChunks()  // clears ocean too
@@ -189,6 +270,9 @@ public class PlanetMeshGenerator : MonoBehaviour
         float dynamicMin = float.MaxValue;
         float dynamicMax = float.MinValue;
 
+        double totalSurfaceRadiusSum = 0;
+        int surfaceSampleCount = 0;
+
         for (int x = 0; x <= width; x++)
         {
             for (int y = 0; y <= height; y++)
@@ -216,12 +300,35 @@ public class PlanetMeshGenerator : MonoBehaviour
                         if (distanceFromCentre < dynamicMin) dynamicMin = distanceFromCentre;
                         if (distanceFromCentre > dynamicMax) dynamicMax = distanceFromCentre;
 
+
+                        totalSurfaceRadiusSum += distanceFromCentre;
+                        surfaceSampleCount++;
                     }
                 }
             }
         }
         minSurfaceRadius = dynamicMin;
         maxSurfaceRadius = dynamicMax;
+
+        if (surfaceSampleCount > 0)
+        {
+            averageSurfaceHeight = (float)(totalSurfaceRadiusSum / surfaceSampleCount);
+        }
+        else
+        {
+            averageSurfaceHeight = planetRadius; // Fallback
+        }
+    }
+
+    private static Gradient CloneGradient(Gradient source)
+    {
+        if (source == null)
+            return new Gradient();
+
+        Gradient copy = new Gradient();
+        copy.SetKeys(source.colorKeys, source.alphaKeys);
+        copy.mode = source.mode;
+        return copy;
     }
 
     private float GetFractalNoise3D(Vector3 position)
@@ -229,7 +336,7 @@ public class PlanetMeshGenerator : MonoBehaviour
         float totalNoise = 0f;
         float frequency = noiseScale;
         float amplitude = 1f;
-        float maxAmplitude = 0f; // Used for normalization
+        float maxAmplitude = 0f;
 
         for (int i = 0; i < octaves; i++)
         {
@@ -239,14 +346,23 @@ public class PlanetMeshGenerator : MonoBehaviour
             float xy = Mathf.PerlinNoise(sample.x, sample.y);
             float yz = Mathf.PerlinNoise(sample.y, sample.z);
             float zx = Mathf.PerlinNoise(sample.z, sample.x);
-
             float yx = Mathf.PerlinNoise(sample.y, sample.x);
             float zy = Mathf.PerlinNoise(sample.z, sample.y);
             float xz = Mathf.PerlinNoise(sample.x, sample.z);
 
-            // Average sampling planes (maps from 0..1 to -1..1 range)
+            // Average sampling planes (0.0 to 1.0 range)
             float currentOctaveNoise = (xy + yz + zx + yx + zy + xz) / 6f;
+
+            // Map to -1.0 to 1.0 range
             currentOctaveNoise = (currentOctaveNoise * 2f) - 1f;
+
+            if (useRidgedNoise)
+            {
+                // Invert the absolute value to create sharp ridges
+                currentOctaveNoise = 1f - Mathf.Abs(currentOctaveNoise);
+                // Square the ridge to sharpen the peaks and widen the valleys
+                currentOctaveNoise *= currentOctaveNoise;
+            }
 
             totalNoise += currentOctaveNoise * amplitude;
             maxAmplitude += amplitude;
@@ -255,7 +371,12 @@ public class PlanetMeshGenerator : MonoBehaviour
             frequency *= lacunarity;
         }
 
-        return totalNoise / maxAmplitude; // Returns normalized value between -1 and 1
+        float normalizedNoise = totalNoise / maxAmplitude;
+
+        // Apply exponent to flatten lowlands and exaggerate high peaks
+        // We preserve the sign so deep ocean trenches remain deep instead of flipping upwards
+        float sign = Mathf.Sign(normalizedNoise);
+        return sign * Mathf.Pow(Mathf.Abs(normalizedNoise), elevationExponent);
     }
     #endregion
 
@@ -348,7 +469,23 @@ public class PlanetMeshGenerator : MonoBehaviour
     public void RandomizeOceanColour()
     {
         oceanColour = GetVibrantAnyColor();
+        
+        if (oceanObject == null)
+        {
+            GenerateOcean();
+            return;
+        }
         oceanObject.GetComponent<MeshRenderer>().sharedMaterial.color = oceanColour;
+    }
+
+    public void RandomizeSeaLevel()
+    {
+        // Sensible bounds relative to mountain height:
+        // -0.6f: Deep oceans, leaving mostly landmasses and lakes
+        //  0.2f: High water level, creating island archipelagos
+       
+        if (randomizeSeaLevelOnGenerate)
+            seaLevelOffset = Random.Range(seaLevelRange.x, seaLevelRange.y);
     }
     Color GetVibrantAnyColor()
     {
@@ -371,11 +508,96 @@ public class PlanetMeshGenerator : MonoBehaviour
         RandomizeSeed();
         RandomizeNoise();
         RandomizeGradient();
+        RandomizeSeaLevel();
         RandomizeOceanColour();
     }
     #endregion
 
+    #region Digging
+
+    private void UpdateDirtyChunks()
+    {
+        foreach (PlanetChunk chunk in chunkIDMap.Values)
+        {
+            if (!chunk.IsDirty)
+                continue;
+
+            chunk.RegenerateMesh();
+            chunk.SetIsDirty(false);
+        }
+    }
+    public void ModifyDensity(Vector3Int gridPos, float amount)
+    {
+        if (!IsInitialized)
+            return;
+
+        if (densityGrid == null)
+            return;
+
+        if (!IsInBounds(gridPos.x, gridPos.y, gridPos.z))
+            return;
+
+        densityGrid[
+            gridPos.x,
+            gridPos.y,
+            gridPos.z
+        ] += amount;
+    }
+
+    public void MarkChunkDirty(Vector3Int gridPos)
+    {
+        if (!IsInitialized)
+            return;
+
+        if (chunkIDMap == null)
+            return;
+
+        if (densityGrid == null)
+            return;
+        int baseX = Mathf.FloorToInt((float)gridPos.x / chunkSize);
+        int baseY = Mathf.FloorToInt((float)gridPos.y / chunkSize);
+        int baseZ = Mathf.FloorToInt((float)gridPos.z / chunkSize);
+
+        bool onXBoundary = gridPos.x % chunkSize == 0;
+        bool onYBoundary = gridPos.y % chunkSize == 0;
+        bool onZBoundary = gridPos.z % chunkSize == 0;
+
+        int xMin = onXBoundary ? -1 : 0;
+        int yMin = onYBoundary ? -1 : 0;
+        int zMin = onZBoundary ? -1 : 0;
+
+        for (int x = xMin; x <= 0; x++)
+        {
+            for (int y = yMin; y <= 0; y++)
+            {
+                for (int z = zMin; z <= 0; z++)
+                {
+                    Vector3Int chunkCoords = new Vector3Int(
+                        baseX + x,
+                        baseY + y,
+                        baseZ + z
+                    );
+
+                    if (chunkIDMap.TryGetValue(chunkCoords, out PlanetChunk chunk))
+                    {
+                        chunk.SetIsDirty(true);
+                    }
+                }
+            }
+        }
+    }
+    #endregion
+
     #region Helper Methods
+    public Vector3Int WorldPointToGridPoint(Vector3 worldPos)
+    {
+        Vector3 localPos = transform.InverseTransformPoint(worldPos);
+
+        // Convert from world/local units into voxel/grid units
+        Vector3 gridPos = (localPos - gridOriginOffset) / voxelSize;
+
+        return Vector3Int.RoundToInt(gridPos);
+    }
     public float GetDensity(int x, int y, int z)
     {
         if (IsInBounds(x, y, z))

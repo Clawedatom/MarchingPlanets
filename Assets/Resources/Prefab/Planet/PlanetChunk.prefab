@@ -13,7 +13,7 @@ GameObject:
   - component: {fileID: 1910855282242984908}
   - component: {fileID: 4206819157515905113}
   - component: {fileID: -755637806708499340}
-  m_Layer: 0
+  m_Layer: 7
   m_Name: PlanetChunk
   m_TagString: Untagged
   m_Icon: {fileID: 0}

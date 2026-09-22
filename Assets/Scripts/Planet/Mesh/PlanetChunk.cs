@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -18,7 +19,22 @@ public class PlanetChunk : MonoBehaviour
     private readonly Vector3[] edgeVertex = new Vector3[12];
 
 
+    public PlanetMeshGenerator Manager
+    {
+        get
+        {
+            if (manager == null)
+            {
+                manager = GetComponentInParent<PlanetMeshGenerator>();
+            }
+            return manager;
+        }
+    }
 
+    private bool isDirty;
+
+    public bool IsDirty => isDirty;
+    public Vector3Int ChunkCoords => chunkCoords;
     private static readonly Vector3Int[] cornerPointOffsets =
     {
         new Vector3Int(0,0,0),
@@ -40,7 +56,7 @@ public class PlanetChunk : MonoBehaviour
         meshFilter = GetComponent<MeshFilter>();
         meshRenderer = GetComponent<MeshRenderer>();
         meshCollider = GetComponent<MeshCollider>();
-        
+
 
         GenerateChunkMesh();
     }
@@ -122,7 +138,7 @@ public class PlanetChunk : MonoBehaviour
             Vector3 posA = localPos + cornerPointOffsets[cornerA];
             Vector3 posB = localPos + cornerPointOffsets[cornerB];
 
-            
+
 
 
             edgeVertex[e] = Interpolate(posA, posB, cubeCorners[cornerA], cubeCorners[cornerB]); //position of mesh vertex based on density values at either side of vertex
@@ -177,9 +193,11 @@ public class PlanetChunk : MonoBehaviour
         Vector3 centerOffset = new Vector3(manager.Width, manager.Height, manager.Depth) * 0.5f * manager.VoxelSize;
         Vector3 centeredGridPos = gridPos * manager.VoxelSize - centerOffset;
 
-        float distanceFromCenter = centerOffset.magnitude;
+        float distanceFromCenter = centeredGridPos.magnitude;
 
         float heightPercent = Mathf.InverseLerp(manager.MinSR, manager.MaxSR, distanceFromCenter);
+
+
 
         return manager.PlanetGradient.Evaluate(heightPercent);
     }
@@ -201,5 +219,56 @@ public class PlanetChunk : MonoBehaviour
 
         meshFilter.sharedMesh = mesh;
         meshCollider.sharedMesh = meshFilter.sharedMesh;
+    }
+
+    public void Dig(Vector3 worldPoint, Vector3 normal, float radius)
+    {
+        Vector3Int gridPos = Manager.WorldPointToGridPoint(worldPoint);
+        Debug.Log(
+            $"{chunkCoords} Digging at World: {worldPoint}, Grid: {gridPos} with normal {normal} and radius {radius}"
+        );
+        
+        int gridRadius = Mathf.CeilToInt(radius / Manager.VoxelSize);
+
+        for (int x = -gridRadius; x <= gridRadius; x++)
+        {
+            for (int y = -gridRadius; y <= gridRadius; y++)
+            {
+                for (int z = -gridRadius; z <= gridRadius; z++)
+                {
+                    Vector3Int currentGridPos = gridPos + new Vector3Int(x, y, z);
+
+                    // Convert voxel distance back into world distance
+                    float distance = Vector3.Distance(
+                        gridPos,
+                        currentGridPos
+                    ) * Manager.VoxelSize;
+
+                    if (distance > radius)
+                        continue;
+
+                    float falloff = 1f - (distance / radius);
+
+                    // Digging removes density
+                    Manager.ModifyDensity(
+                        currentGridPos,
+                        -falloff
+                    );
+
+                    // Make sure the chunk containing this density point
+                    // gets regenerated.
+                    Manager.MarkChunkDirty(currentGridPos);
+                }
+            }
+        }
+    }
+    public void SetIsDirty(bool value)
+    {
+        isDirty = value;
+    }
+
+    public void RegenerateMesh()
+    {
+        GenerateChunkMesh();
     }
 }
